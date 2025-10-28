@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sistem Peminjaman Aset/Ruangan Kampus (Demo)</title>
+  <style>
+    :root{
+      --bg:#f6f7fb; --card:#ffffff; --primary:#2b6cb0; --accent:#2c7a7b;
+      --muted:#666;
+    }
+    body{font-family:Inter, system-ui, Arial; background:var(--bg); margin:0; padding:24px; color:#111;}
+    header{display:flex; align-items:center; gap:16px; margin-bottom:18px;}
+    h1{margin:0; font-size:20px;}
+    .container{display:grid; grid-template-columns: 1fr 420px; gap:18px;}
+    .card{background:var(--card); padding:14px; border-radius:10px; box-shadow:0 6px 18px rgba(15,23,42,0.06);}
+    label{display:block; font-size:13px; margin-top:8px; color:var(--muted);}
+    input, select {width:100%; padding:8px 10px; margin-top:6px; border-radius:6px; border:1px solid #ddd; box-sizing:border-box;}
+    button{padding:8px 12px; border-radius:8px; border:none; cursor:pointer; background:var(--primary); color:#fff;}
+    .small-btn{padding:6px 8px; font-size:13px;}
+    table{width:100%; border-collapse:collapse; font-size:13px;}
+    th,td{padding:8px; border-bottom:1px solid #eee; text-align:left;}
+    .muted{color:var(--muted); font-size:13px;}
+    .tag{display:inline-block; padding:4px 8px; border-radius:8px; font-size:12px;}
+    .busy{background:#fbd5d5; color:#9b1c1c;}
+    .free{background:#dff6e0; color:#1f7a3a;}
+    .flex{display:flex; gap:8px; align-items:center;}
+    .col{display:flex; flex-direction:column;}
+    .controls{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;}
+    .pred{margin-top:8px; font-size:13px;}
+    .small{font-size:12px; color:#444;}
+    .note{font-size:12px; color:#666; margin-top:6px;}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="card" style="display:flex;align-items:center;padding:10px 14px;">
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><rect rx='6' width='36' height='36' fill='%232b6cb0'/><text x='50%' y='58%' font-size='20' text-anchor='middle' fill='white' font-family='Arial'>A</text></svg>" alt="logo" style="width:36px;height:36px;margin-right:10px;border-radius:6px;">
+      <div>
+        <h1>Sistem Peminjaman Aset/Ruangan (Demo)</h1>
+        <div class="muted">Manajemen lab & proyektor + prediksi ketersediaan (Interpolasi Lagrange)</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2 style="margin-bottom:8px;">Form Peminjaman</h2>
+
+      <div>
+        <label>Nama peminjam</label>
+        <input id="name" placeholder="Nama (dosen / mahasiswa / staf)" />
+
+        <label>Aset / Ruangan</label>
+        <select id="assetSelect"></select>
+        <div class="controls">
+          <input id="newAssetName" placeholder="Nama aset baru (mis. Lab Komputasi A)" />
+          <button id="addAssetBtn" class="small-btn">Tambah Aset</button>
+        </div>
+
+        <label>Tanggal</label>
+        <input id="date" type="date" />
+
+        <label>Jam Mulai</label>
+        <input id="timeStart" type="time" />
+
+        <label>Jam Selesai</label>
+        <input id="timeEnd" type="time" />
+
+        <div class="controls">
+          <button id="bookBtn">Pinjam</button>
+          <button id="checkBtn" class="small-btn" style="background:var(--accent)">Cek Ketersediaan</button>
+          <button id="clearBtn" class="small-btn" style="background:#e53e3e">Hapus Semua Data</button>
+        </div>
+
+        <div id="msg" class="note"></div>
+
+        <div class="pred card" style="margin-top:12px;">
+          <strong>Prediksi ketersediaan (contoh sederhana)</strong>
+          <div class="small" id="predText">Pilih aset dan tanggal untuk melihat prediksi.</div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card" style="margin-bottom:12px;">
+        <h3>Daftar Aset</h3>
+        <table id="assetTable">
+          <thead><tr><th>Nama</th><th>Jenis</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Daftar Peminjaman</h3>
+        <div class="muted small">Peminjaman tersimpan di browser (localStorage).</div>
+        <table id="bookingTable">
+          <thead><tr><th>Nama</th><th>Aset</th><th>Tanggal</th><th>Jam</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    /**********************
+     * Data dan inisialisasi
+     **********************/
+    const LS_KEYS = {ASSETS: 'si_assets_demo_v1', BOOKS: 'si_books_demo_v1', HIST: 'si_hist_demo_v1'};
+    // Aset awal
+    const defaultAssets = [
+      {id: 'lab-A', name: 'Laboratorium Komputasi A', type: 'Laboratorium'},
+      {id: 'proj-1', name: 'Proyektor Ruang 101', type: 'Proyektor'}
+    ];
+
+    // Data historis contoh: pemakaian harian (jumlah peminjaman pada hari ke-x)
+    // xs = hari 0..6 -> ys = jumlah peminjaman tiap hari. Kita pakai ini untuk demonstrasi Lagrange.
+    const defaultHist = {
+      // keyed by asset id; each is array of counts for days 0..n-1
+      'lab-A': [2, 3, 2, 4, 3, 4, 5],
+      'proj-1': [1, 1, 0, 2, 1, 1, 1]
+    };
+
+    // util localStorage load / save
+    function load(key, fallback) {
+      const s = localStorage.getItem(key);
+      if (!s) return fallback;
+      try { return JSON.parse(s); } catch(e){ return fallback; }
+    }
+    function save(key, v){ localStorage.setItem(key, JSON.stringify(v)); }
+
+    // memastikan ada data awal
+    let assets = load(LS_KEYS.ASSETS, defaultAssets);
+    let bookings = load(LS_KEYS.BOOKS, []);
+    let hist = load(LS_KEYS.HIST, defaultHist);
+    save(LS_KEYS.ASSETS, assets);
+    save(LS_KEYS.BOOKS, bookings);
+    save(LS_KEYS.HIST, hist);
+
+    // elemen
+    const assetSelect = document.getElementById('assetSelect');
+    const assetTableBody = document.querySelector('#assetTable tbody');
+    const bookingTBody = document.querySelector('#bookingTable tbody');
+    const msg = document.getElementById('msg');
+    const predText = document.getElementById('predText');
+
+    function uid(prefix='id'){ return prefix + '-' + Math.random().toString(36).slice(2,9); }
+
+    /**********************
+     * Render UI
+     **********************/
+    function renderAssets(){
+      // select
+      assetSelect.innerHTML = '';
+      assets.forEach(a=>{
+        const opt = document.createElement('option');
+        opt.value = a.id; opt.textContent = a.name;
+        assetSelect.appendChild(opt);
+      });
+      // table
+      assetTableBody.innerHTML = '';
+      assets.forEach(a=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${a.name}</td><td>${a.type || '-'}</td><td><button class="small-btn" data-id="${a.id}">Hapus</button></td>`;
+        assetTableBody.appendChild(tr);
+      });
+      // attach delete buttons
+      assetTableBody.querySelectorAll('button').forEach(b=>{
+        b.addEventListener('click', ()=> {
+          const id = b.dataset.id;
+          assets = assets.filter(x => x.id !== id);
+          save(LS_KEYS.ASSETS, assets);
+          // remove hist if exists
+          delete hist[id];
+          save(LS_KEYS.HIST, hist);
+          renderAll();
+        });
+      });
+    }
+
+    function renderBookings(){
+      bookingTBody.innerHTML = '';
+      const sorted = bookings.slice().sort((a,b)=> (a.date + a.start) < (b.date + b.start) ? -1:1);
+      sorted.forEach((bk, i)=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${bk.name}</td><td>${getAssetName(bk.asset)}</td><td>${bk.date}</td><td>${bk.start} - ${bk.end}</td>
+          <td><button class="small-btn" data-idx="${i}">Batal</button></td>`;
+        bookingTBody.appendChild(tr);
+      });
+      bookingTBody.querySelectorAll('button').forEach(b=>{
+        b.addEventListener('click', ()=> {
+          const idx = parseInt(b.dataset.idx);
+          // remove by matching
+          bookings.splice(idx,1);
+          save(LS_KEYS.BOOKS, bookings);
+          renderAll();
+        });
+      });
+    }
+
+    function getAssetName(id){
+      const a = assets.find(x=>x.id===id);
+      return a ? a.name : id;
+    }
+
+    function renderAll(){ renderAssets(); renderBookings(); }
+
+    renderAll();
+
+    /**********************
+     * Menambah aset
+     **********************/
+    document.getElementById('addAssetBtn').addEventListener('click', ()=>{
+      const input = document.getElementById('newAssetName');
+      const name = (input.value || '').trim();
+      if(!name){ showMsg('Masukkan nama aset baru.'); return; }
+      const id = uid('asset');
+      assets.push({id, name, type: 'Lainnya'});
+      save(LS_KEYS.ASSETS, assets);
+      // buat histori contoh awal (kosong)
+      hist[id] = [0,0,0,0,0,0,0];
+      save(LS_KEYS.HIST, hist);
+      input.value = '';
+      renderAll();
+      showMsg('Aset baru ditambahkan.');
+    });
+
+    /**********************
+     * Booking / Cek bentrok
+     **********************/
+    function timeToMinutes(t){ // "HH:MM" -> minutes
+      if(!t) return 0;
+      const [h,m] = t.split(':').map(Number);
+      return h*60 + m;
+    }
+    function overlap(aStart,aEnd,bStart,bEnd){
+      return Math.max(aStart,bStart) < Math.min(aEnd,bEnd);
+    }
+
+    function isConflict(assetId, date, start, end){
+      const s = timeToMinutes(start), e = timeToMinutes(end);
+      for(const b of bookings){
+        if(b.asset === assetId && b.date === date){
+          if(overlap(s,e, timeToMinutes(b.start), timeToMinutes(b.end))) return b;
+        }
+      }
+      return null;
+    }
+
+    document.getElementById('bookBtn').addEventListener('click', ()=>{
+      const name = document.getElementById('name').value.trim();
+      const asset = assetSelect.value;
+      const date = document.getElementById('date').value;
+      const start = document.getElementById('timeStart').value;
+      const end = document.getElementById('timeEnd').value;
+
+      if(!name || !asset || !date || !start || !end){ showMsg('Lengkapi semua field.'); return; }
+      if(timeToMinutes(start) >= timeToMinutes(end)){ showMsg('Jam mulai harus lebih awal dari jam selesai.'); return; }
+
+      const conflict = isConflict(asset, date, start, end);
+      if(conflict){
+        showMsg(`Bentrokan jadwal dengan peminjaman: ${conflict.name} (${conflict.start}-${conflict.end}) pada ${conflict.date}`);
+        return;
+      }
+
+      // simpan
+      bookings.push({id: uid('book'), name, asset, date, start, end, created: new Date().toISOString()});
+      save(LS_KEYS.BOOKS, bookings);
+      // tambahkan ke histori (naikkan count untuk hari-of-week sebagai contoh)
+      addHistSample(asset);
+      renderAll();
+      showMsg('Peminjaman berhasil disimpan.');
+    });
+
+    document.getElementById('checkBtn').addEventListener('click', ()=>{
+      const asset = assetSelect.value;
+      const date = document.getElementById('date').value;
+      const start = document.getElementById('timeStart').value;
+      const end = document.getElementById('timeEnd').value;
+      if(!asset || !date || !start || !end){ showMsg('Isi aset, tanggal, jam mulai & selesai untuk cek.'); return; }
+      const conflict = isConflict(asset,date,start,end);
+      if(conflict){
+        showMsg(`Bentrokan jadwal: ${conflict.name} (${conflict.start}-${conflict.end}) pada ${conflict.date}`);
+      } else {
+        showMsg('Tidak ada bentrokan pada jadwal yang dipilih.');
+      }
+      // tampilkan prediksi juga
+      showPredictionFor(asset, date);
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      if(confirm('Hapus semua data (aset & peminjaman & histori)?')) {
+        assets = defaultAssets.slice();
+        bookings = [];
+        hist = defaultHist;
+        save(LS_KEYS.ASSETS, assets);
+        save(LS_KEYS.BOOKS, bookings);
+        save(LS_KEYS.HIST, hist);
+        renderAll();
+        showMsg('Semua data direset ke kondisi awal.');
+      }
+    });
+
+    function showMsg(t){
+      msg.textContent = t;
+      setTimeout(()=> { if(msg.textContent === t) msg.textContent = ''; }, 6000);
+    }
+
+    /**********************
+     * Prediksi: Interpolasi Lagrange (sederhana)
+     *
+     * Penjelasan singkat:
+     * - Kita punya xs = 0..n-1 (hari 0..n-1), ys = jumlah peminjaman per hari.
+     * - Prediksi untuk hari n (hari berikutnya) dihitung dgn polinom Lagrange.
+     * - Jika hasil prediksi tinggi (misalnya > threshold), rekomendasi = "kemungkinan sibuk".
+     **********************/
+    function lagrangePredict(xs, ys, xTarget){
+      // xs and ys arrays same length
+      const n = xs.length;
+      let y = 0;
+      for(let i=0;i<n;i++){
+        let Li = 1;
+        for(let j=0;j<n;j++){
+          if(i===j) continue;
+          Li *= (xTarget - xs[j]) / (xs[i] - xs[j]);
+        }
+        y += ys[i] * Li;
+      }
+      return y;
+    }
+
+    function showPredictionFor(assetId, dateStr){
+      // get historical counts for the asset
+      const arr = hist[assetId] || null;
+      if(!arr){ predText.textContent = 'Tidak ada data historis untuk aset ini.'; return; }
+      // xs 0..n-1
+      const n = arr.length;
+      const xs = Array.from({length:n}, (_,i)=>i);
+      const ys = arr;
+      // predict for day n (next day)
+      const pred = lagrangePredict(xs, ys, n);
+      const predRounded = Math.max(0, Math.round(pred*10)/10);
+      // buat rekomendasi sederhana: jika pred >= 3 maka "maaf kemungkinan sibuk"
+      const threshold = 3;
+      const r = pred >= threshold ? 'Kemungkinan sibuk (perkir. peminjaman tinggi).' : 'Kemungkinan tersedia.';
+      predText.textContent = `Prediksi jumlah peminjaman utk hari berikutnya (model Lagrange sederhana): ${predRounded}. Rekomendasi: ${r}`;
+    }
+
+    // saat pilih aset / tanggal, tampilkan prediksi ringkas
+    assetSelect.addEventListener('change', ()=> {
+      const asset = assetSelect.value;
+      const date = document.getElementById('date').value;
+      if(date) showPredictionFor(asset, date);
+      else predText.textContent = 'Pilih tanggal utk melihat prediksi.';
+    });
+    document.getElementById('date').addEventListener('change', ()=> {
+      const asset = assetSelect.value;
+      const date = document.getElementById('date').value;
+      if(asset && date) showPredictionFor(asset, date);
+    });
+
+    /**********************
+     * Fungsi simulasi memperbarui histori
+     * (untuk demo: setiap simpan peminjaman, tambahkan 1 count ke hari-of-week)
+     **********************/
+    function addHistSample(assetId){
+      if(!hist[assetId]) hist[assetId] = [0,0,0,0,0,0,0];
+      // naikkan pada hari ke-akhir (simulasi sederhana)
+      hist[assetId].push( Math.max(0, Math.round((hist[assetId].slice(-1)[0] || 0) + (Math.random()*1.2 - 0.3))) );
+      // agar panjang tetap wajar (ambil 7 terakhir)
+      if(hist[assetId].length > 7) hist[assetId] = hist[assetId].slice(-7);
+      save(LS_KEYS.HIST, hist);
+    }
+
+    /**********************
+     * Inisialisasi contoh: jika tidak ada asset, isi default
+     **********************/
+    if(!assets || assets.length === 0){
+      assets = defaultAssets.slice();
+      save(LS_KEYS.ASSETS, assets);
+    }
+    if(!hist) { hist = defaultHist; save(LS_KEYS.HIST, hist); }
+
+    renderAll();
+
+    /**********************
+     * Catatan:
+     * - Ini demo frontend saja (tanpa backend). Untuk implementasi produksi, tambahkan server,
+     *   autentikasi, validasi lebih ketat, penjadwalan, timezone handling, notifikasi, dsb.
+     * - Algoritma Lagrange di sini digunakan sebagai contoh penerapan metode numerik pada sistem
+     *   informasi (lihat proposal). Untuk prediksi nyata, gunakan model statistik atau ML dan
+     *   dataset yang lebih besar.
+     **********************/
+  </script>
+</body>
+</html>
